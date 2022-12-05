@@ -19,15 +19,21 @@ var (
 	failed  = aurora.Red("[✘]").String()
 
 	protocolTests = map[string]map[string]testutils.TestCase{
-		"http":      httpTestcases,
-		"network":   networkTestcases,
-		"dns":       dnsTestCases,
-		"workflow":  workflowTestcases,
-		"loader":    loaderTestcases,
-		"websocket": websocketTestCases,
-		"headless":  headlessTestcases,
-		"whois":     whoisTestCases,
-		"ssl":       sslTestcases,
+		"http":            httpTestcases,
+		"network":         networkTestcases,
+		"dns":             dnsTestCases,
+		"workflow":        workflowTestcases,
+		"loader":          loaderTestcases,
+		"websocket":       websocketTestCases,
+		"headless":        headlessTestcases,
+		"whois":           whoisTestCases,
+		"ssl":             sslTestcases,
+		"code":            codeTestcases,
+		"templatesPath":   templatesPathTestCases,
+		"templatesDir":    templatesDirTestCases,
+		"file":            fileTestcases,
+		"offlineHttp":     offlineHttpTestcases,
+		"customConfigDir": customConfigDirTestCases,
 	}
 )
 
@@ -56,7 +62,7 @@ func runTests(customTemplatePaths map[string]struct{}) map[string]struct{} {
 
 		for templatePath, testCase := range testCases {
 			if len(customTemplatePaths) == 0 || contains(customTemplatePaths, templatePath) {
-				if err, failedTemplatePath := execute(testCase, templatePath); err != nil {
+				if failedTemplatePath, err := execute(testCase, templatePath); err != nil {
 					failedTestTemplatePaths[failedTemplatePath] = struct{}{}
 				}
 			}
@@ -66,14 +72,14 @@ func runTests(customTemplatePaths map[string]struct{}) map[string]struct{} {
 	return failedTestTemplatePaths
 }
 
-func execute(testCase testutils.TestCase, templatePath string) (error, string) {
+func execute(testCase testutils.TestCase, templatePath string) (string, error) {
 	if err := testCase.Execute(templatePath); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%s Test \"%s\" failed: %s\n", failed, templatePath, err)
-		return err, templatePath
+		return templatePath, err
 	}
 
 	fmt.Printf("%s Test \"%s\" passed!\n", success, templatePath)
-	return nil, ""
+	return "", nil
 }
 
 func expectResultsCount(results []string, expectedNumber int) error {

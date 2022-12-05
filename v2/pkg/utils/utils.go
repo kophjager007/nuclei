@@ -2,19 +2,16 @@ package utils
 
 import (
 	"errors"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
+
+	"github.com/projectdiscovery/nuclei/v2/pkg/catalog"
 )
 
 func IsBlank(value string) bool {
 	return strings.TrimSpace(value) == ""
-}
-
-func IsNotBlank(value string) bool {
-	return !IsBlank(value)
 }
 
 func UnwrapError(err error) error {
@@ -44,24 +41,24 @@ func IsURL(input string) bool {
 }
 
 // ReadFromPathOrURL reads and returns the contents of a file or url.
-func ReadFromPathOrURL(templatePath string) (data []byte, err error) {
+func ReadFromPathOrURL(templatePath string, catalog catalog.Catalog) (data []byte, err error) {
 	if IsURL(templatePath) {
 		resp, err := http.Get(templatePath)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
-		data, err = ioutil.ReadAll(resp.Body)
+		data, err = io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		f, err := os.Open(templatePath)
+		f, err := catalog.OpenFile(templatePath)
 		if err != nil {
 			return nil, err
 		}
 		defer f.Close()
-		data, err = ioutil.ReadAll(f)
+		data, err = io.ReadAll(f)
 		if err != nil {
 			return nil, err
 		}

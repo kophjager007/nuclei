@@ -2,20 +2,19 @@ package engine
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"runtime"
 	"strings"
 
-	"github.com/corpix/uarand"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/pkg/errors"
 	ps "github.com/shirou/gopsutil/v3/process"
 
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
-	"github.com/projectdiscovery/stringsutil"
+	fileutil "github.com/projectdiscovery/utils/file"
+	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
 // Browser is a browser structure for nuclei headless module
@@ -30,7 +29,7 @@ type Browser struct {
 
 // New creates a new nuclei headless browser module
 func New(options *types.Options) (*Browser, error) {
-	dataStore, err := ioutil.TempDir("", "nuclei-*")
+	dataStore, err := os.MkdirTemp("", "nuclei-*")
 	if err != nil {
 		return nil, errors.Wrap(err, "could not create temporary directory")
 	}
@@ -54,7 +53,14 @@ func New(options *types.Options) (*Browser, error) {
 		chromeLauncher = chromeLauncher.NoSandbox(true)
 	}
 
-	if options.UseInstalledChrome {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+
+	// if musl is used, most likely we are on alpine linux which is not supported by go-rod, so we fallback to default chrome
+	useMusl, _ := fileutil.UseMusl(executablePath)
+	if options.UseInstalledChrome || useMusl {
 		if chromePath, hasChrome := launcher.LookPath(); hasChrome {
 			chromeLauncher.Bin(chromePath)
 		} else {
@@ -89,9 +95,6 @@ func New(options *types.Options) (*Browser, error) {
 			customAgent = parts[1]
 		}
 	}
-	if customAgent == "" {
-		customAgent = uarand.GetRandom()
-	}
 
 	httpclient, err := newHttpClient(options)
 	if err != nil {
@@ -114,6 +117,16 @@ func MustDisableSandbox() bool {
 	// linux with root user needs "--no-sandbox" option
 	// https://github.com/chromium/chromium/blob/c4d3c31083a2e1481253ff2d24298a1dfe19c754/chrome/test/chromedriver/client/chromedriver.py#L209
 	return runtime.GOOS == "linux" && os.Geteuid() == 0
+}
+
+// SetUserAgent sets custom user agent to the browser
+func (b *Browser) SetUserAgent(customUserAgent string) {
+	b.customAgent = customUserAgent
+}
+
+// UserAgent fetch the currently set custom user agent
+func (b *Browser) UserAgent() string {
+	return b.customAgent
 }
 
 // Close closes the browser engine

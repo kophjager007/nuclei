@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +21,10 @@ import (
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators"
 	"github.com/projectdiscovery/nuclei/v2/pkg/output"
 	"github.com/projectdiscovery/nuclei/v2/pkg/progress"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/responsehighlighter"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/writer"
 	"github.com/projectdiscovery/nuclei/v2/pkg/reporting"
+	"github.com/projectdiscovery/retryablehttp-go"
 )
 
 // Client is a wrapped client for interactsh server.
@@ -34,13 +37,18 @@ type Client struct {
 	interactions *ccache.Cache
 	// matchedTemplates is a stored cache to track matched templates
 	matchedTemplates *ccache.Cache
+	// interactshURLs is a stored cache to track track multiple interactsh markers
+	interactshURLs *ccache.Cache
 
 	options          *Options
 	eviction         time.Duration
 	pollDuration     time.Duration
 	cooldownDuration time.Duration
 
-	hostname       string
+	dataMutex *sync.RWMutex
+
+	hostname string
+
 	firstTimeGroup sync.Once
 	generated      uint32 // decide to wait if we have a generated url
 	matched        bool
@@ -48,7 +56,12 @@ type Client struct {
 
 var (
 	defaultInteractionDuration = 60 * time.Second
-	interactshURLMarker        = "{{interactsh-url}}"
+	interactshURLMarkerRegex   = regexp.MustCompile(`{{interactsh-url(?:_[0-9]+){0,3}}}`)
+)
+
+const (
+	stopAtFirstMatchAttribute = "stop-at-first-match"
+	templateIdAttribute       = "template-id"
 )
 
 // Options contains configuration options for interactsh nuclei integration.
@@ -65,7 +78,7 @@ type Options struct {
 	Eviction time.Duration
 	// CooldownPeriod is additional time to wait for interactions after closing
 	// of the poller.
-	ColldownPeriod time.Duration
+	CooldownPeriod time.Duration
 	// PollDuration is the time to wait before each poll to the server for interactions.
 	PollDuration time.Duration
 	// Output is the output writer for nuclei
@@ -82,8 +95,11 @@ type Options struct {
 	DisableHttpFallback bool
 	// NoInteractsh disables the engine
 	NoInteractsh bool
+	// NoColor dissbles printing colors for matches
+	NoColor bool
 
 	StopAtFirstMatch bool
+	HTTPClient       *retryablehttp.Client
 }
 
 const defaultMaxInteractionsCount = 5000
@@ -99,15 +115,18 @@ func New(options *Options) (*Client, error) {
 	interactionsCache := ccache.New(interactionsCfg)
 
 	matchedTemplateCache := ccache.New(ccache.Configure().MaxSize(defaultMaxInteractionsCount))
+	interactshURLCache := ccache.New(ccache.Configure().MaxSize(defaultMaxInteractionsCount))
 
 	interactClient := &Client{
 		eviction:         options.Eviction,
 		interactions:     interactionsCache,
 		matchedTemplates: matchedTemplateCache,
+		interactshURLs:   interactshURLCache,
 		options:          options,
 		requests:         cache,
 		pollDuration:     options.PollDuration,
-		cooldownDuration: options.ColldownPeriod,
+		cooldownDuration: options.CooldownPeriod,
+		dataMutex:        &sync.RWMutex{},
 	}
 	return interactClient, nil
 }
@@ -118,12 +137,13 @@ func NewDefaultOptions(output output.Writer, reporting *reporting.Client, progre
 		ServerURL:           client.DefaultOptions.ServerURL,
 		CacheSize:           5000,
 		Eviction:            60 * time.Second,
-		ColldownPeriod:      5 * time.Second,
+		CooldownPeriod:      5 * time.Second,
 		PollDuration:        5 * time.Second,
 		Output:              output,
 		IssuesClient:        reporting,
 		Progress:            progress,
 		DisableHttpFallback: true,
+		NoColor:             false,
 	}
 }
 
@@ -134,8 +154,8 @@ func (c *Client) firstTimeInitializeClient() error {
 	interactsh, err := client.New(&client.Options{
 		ServerURL:           c.options.ServerURL,
 		Token:               c.options.Authorization,
-		PersistentSession:   false,
 		DisableHTTPFallback: c.options.DisableHttpFallback,
+		HTTPClient:          c.options.HTTPClient,
 	})
 	if err != nil {
 		return errors.Wrap(err, "could not create client")
@@ -145,12 +165,12 @@ func (c *Client) firstTimeInitializeClient() error {
 	interactURL := interactsh.URL()
 	interactDomain := interactURL[strings.Index(interactURL, ".")+1:]
 	gologger.Info().Msgf("Using Interactsh Server: %s", interactDomain)
+
+	c.dataMutex.Lock()
 	c.hostname = interactDomain
+	c.dataMutex.Unlock()
 
 	interactsh.StartPolling(c.pollDuration, func(interaction *server.Interaction) {
-		if c.options.Debug || c.options.DebugRequest || c.options.DebugResponse {
-			c.debugPrintInteraction(interaction)
-		}
 		item := c.requests.Get(interaction.UniqueID)
 
 		if item == nil {
@@ -170,8 +190,8 @@ func (c *Client) firstTimeInitializeClient() error {
 			return
 		}
 
-		if _, ok := request.Event.InternalEvent["stop-at-first-match"]; ok || c.options.StopAtFirstMatch {
-			gotItem := c.matchedTemplates.Get(hash(request.Event.InternalEvent["template-id"].(string), request.Event.InternalEvent["host"].(string)))
+		if _, ok := request.Event.InternalEvent[stopAtFirstMatchAttribute]; ok || c.options.StopAtFirstMatch {
+			gotItem := c.matchedTemplates.Get(hash(request.Event.InternalEvent[templateIdAttribute].(string), request.Event.InternalEvent["host"].(string)))
 			if gotItem != nil {
 				return
 			}
@@ -189,7 +209,7 @@ func (c *Client) processInteractionForRequest(interaction *server.Interaction, d
 	data.Event.InternalEvent["interactsh_response"] = interaction.RawResponse
 	data.Event.InternalEvent["interactsh_ip"] = interaction.RemoteAddress
 
-	result, matched := data.Operators.Execute(data.Event.InternalEvent, data.MatchFunc, data.ExtractFunc, false)
+	result, matched := data.Operators.Execute(data.Event.InternalEvent, data.MatchFunc, data.ExtractFunc, c.options.Debug || c.options.DebugRequest || c.options.DebugResponse)
 	if !matched || result == nil {
 		return false // if we don't match, return
 	}
@@ -205,10 +225,14 @@ func (c *Client) processInteractionForRequest(interaction *server.Interaction, d
 		event.Interaction = interaction
 	}
 
+	if c.options.Debug || c.options.DebugRequest || c.options.DebugResponse {
+		c.debugPrintInteraction(interaction, data.Event.OperatorsResult)
+	}
+
 	if writer.WriteResult(data.Event, c.options.Output, c.options.Progress, c.options.IssuesClient) {
 		c.matched = true
-		if _, ok := data.Event.InternalEvent["stop-at-first-match"]; ok || c.options.StopAtFirstMatch {
-			c.matchedTemplates.Set(hash(data.Event.InternalEvent["template-id"].(string), data.Event.InternalEvent["host"].(string)), true, defaultInteractionDuration)
+		if _, ok := data.Event.InternalEvent[stopAtFirstMatchAttribute]; ok || c.options.StopAtFirstMatch {
+			c.matchedTemplates.Set(hash(data.Event.InternalEvent[templateIdAttribute].(string), data.Event.InternalEvent["host"].(string)), true, defaultInteractionDuration)
 		}
 	}
 	return true
@@ -246,25 +270,40 @@ func (c *Client) Close() bool {
 // It accepts data to replace as well as the URL to replace placeholders
 // with generated uniquely for each request.
 func (c *Client) ReplaceMarkers(data string, interactshURLs []string) (string, []string) {
-	for strings.Contains(data, interactshURLMarker) {
+	for interactshURLMarkerRegex.Match([]byte(data)) {
 		url := c.URL()
 		interactshURLs = append(interactshURLs, url)
-		data = strings.Replace(data, interactshURLMarker, url, 1)
+		interactshURLMarker := interactshURLMarkerRegex.FindString(data)
+		if interactshURLMarker != "" {
+			data = strings.Replace(data, interactshURLMarker, url, 1)
+			urlIndex := strings.Index(url, ".")
+			if urlIndex == -1 {
+				continue
+			}
+			c.interactshURLs.Set(url, interactshURLMarker, defaultInteractionDuration)
+		}
 	}
 	return data, interactshURLs
 }
 
 // MakePlaceholders does placeholders for interact URLs and other data to a map
 func (c *Client) MakePlaceholders(urls []string, data map[string]interface{}) {
-	data["interactsh-server"] = c.hostname
+	data["interactsh-server"] = c.getInteractServerHostname()
+	for _, url := range urls {
+		if interactshURLMarker := c.interactshURLs.Get(url); interactshURLMarker != nil {
+			if interactshURLMarker, ok := interactshURLMarker.Value().(string); ok {
+				interactshMarker := strings.TrimSuffix(strings.TrimPrefix(interactshURLMarker, "{{"), "}}")
 
-	if len(urls) == 1 {
-		urlIndex := strings.Index(urls[0], ".")
-		if urlIndex == -1 {
-			return
+				c.interactshURLs.Delete(url)
+
+				data[interactshMarker] = url
+				urlIndex := strings.Index(url, ".")
+				if urlIndex == -1 {
+					continue
+				}
+				data[strings.Replace(interactshMarker, "url", "id", 1)] = url[:urlIndex]
+			}
 		}
-		data["interactsh-url"] = urls[0]
-		data["interactsh-id"] = urls[0][:urlIndex]
 	}
 }
 
@@ -290,8 +329,8 @@ func (c *Client) RequestEvent(interactshURLs []string, data *RequestData) {
 	for _, interactshURL := range interactshURLs {
 		id := strings.TrimRight(strings.TrimSuffix(interactshURL, c.hostname), ".")
 
-		if _, ok := data.Event.InternalEvent["stop-at-first-match"]; ok || c.options.StopAtFirstMatch {
-			gotItem := c.matchedTemplates.Get(hash(data.Event.InternalEvent["template-id"].(string), data.Event.InternalEvent["host"].(string)))
+		if _, ok := data.Event.InternalEvent[stopAtFirstMatchAttribute]; ok || c.options.StopAtFirstMatch {
+			gotItem := c.matchedTemplates.Get(hash(data.Event.InternalEvent[templateIdAttribute].(string), data.Event.InternalEvent["host"].(string)))
 			if gotItem != nil {
 				break
 			}
@@ -347,38 +386,38 @@ func HasMatchers(op *operators.Operators) bool {
 
 // HasMarkers checks if the text contains interactsh markers
 func HasMarkers(data string) bool {
-	return strings.Contains(data, interactshURLMarker)
+	return interactshURLMarkerRegex.Match([]byte(data))
 }
 
-func (c *Client) debugPrintInteraction(interaction *server.Interaction) {
+func (c *Client) debugPrintInteraction(interaction *server.Interaction, event *operators.Result) {
 	builder := &bytes.Buffer{}
 
 	switch interaction.Protocol {
 	case "dns":
 		builder.WriteString(formatInteractionHeader("DNS", interaction.FullId, interaction.RemoteAddress, interaction.Timestamp))
 		if c.options.DebugRequest || c.options.Debug {
-			builder.WriteString(formatInteractionMessage("DNS Request", interaction.RawRequest))
+			builder.WriteString(formatInteractionMessage("DNS Request", interaction.RawRequest, event, c.options.NoColor))
 		}
 		if c.options.DebugResponse || c.options.Debug {
-			builder.WriteString(formatInteractionMessage("DNS Response", interaction.RawResponse))
+			builder.WriteString(formatInteractionMessage("DNS Response", interaction.RawResponse, event, c.options.NoColor))
 		}
 	case "http":
 		builder.WriteString(formatInteractionHeader("HTTP", interaction.FullId, interaction.RemoteAddress, interaction.Timestamp))
 		if c.options.DebugRequest || c.options.Debug {
-			builder.WriteString(formatInteractionMessage("HTTP Request", interaction.RawRequest))
+			builder.WriteString(formatInteractionMessage("HTTP Request", interaction.RawRequest, event, c.options.NoColor))
 		}
 		if c.options.DebugResponse || c.options.Debug {
-			builder.WriteString(formatInteractionMessage("HTTP Response", interaction.RawResponse))
+			builder.WriteString(formatInteractionMessage("HTTP Response", interaction.RawResponse, event, c.options.NoColor))
 		}
 	case "smtp":
 		builder.WriteString(formatInteractionHeader("SMTP", interaction.FullId, interaction.RemoteAddress, interaction.Timestamp))
 		if c.options.DebugRequest || c.options.Debug || c.options.DebugResponse {
-			builder.WriteString(formatInteractionMessage("SMTP Interaction", interaction.RawRequest))
+			builder.WriteString(formatInteractionMessage("SMTP Interaction", interaction.RawRequest, event, c.options.NoColor))
 		}
 	case "ldap":
 		builder.WriteString(formatInteractionHeader("LDAP", interaction.FullId, interaction.RemoteAddress, interaction.Timestamp))
 		if c.options.DebugRequest || c.options.Debug || c.options.DebugResponse {
-			builder.WriteString(formatInteractionMessage("LDAP Interaction", interaction.RawRequest))
+			builder.WriteString(formatInteractionMessage("LDAP Interaction", interaction.RawRequest, event, c.options.NoColor))
 		}
 	}
 	fmt.Fprint(os.Stderr, builder.String())
@@ -388,7 +427,8 @@ func formatInteractionHeader(protocol, ID, address string, at time.Time) string 
 	return fmt.Sprintf("[%s] Received %s interaction from %s at %s", ID, protocol, address, at.Format("2006-01-02 15:04:05"))
 }
 
-func formatInteractionMessage(key, value string) string {
+func formatInteractionMessage(key, value string, event *operators.Result, noColor bool) string {
+	value = responsehighlighter.Highlight(event, value, noColor, false)
 	return fmt.Sprintf("\n------------\n%s\n------------\n\n%s\n\n", key, value)
 }
 
@@ -397,4 +437,11 @@ func hash(templateID, host string) string {
 	h.Write([]byte(templateID))
 	h.Write([]byte(host))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (c *Client) getInteractServerHostname() string {
+	c.dataMutex.RLock()
+	defer c.dataMutex.RUnlock()
+
+	return c.hostname
 }

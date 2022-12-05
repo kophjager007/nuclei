@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -12,34 +13,43 @@ import (
 
 	"github.com/go-playground/validator/v10"
 
-	"github.com/projectdiscovery/fileutil"
 	"github.com/projectdiscovery/goflags"
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/gologger/formatter"
 	"github.com/projectdiscovery/gologger/levels"
 	"github.com/projectdiscovery/nuclei/v2/pkg/catalog/config"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/protocolinit"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/utils/vardump"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/headless/engine"
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
+	"github.com/projectdiscovery/stringsutil"
+	fileutil "github.com/projectdiscovery/utils/file"
 )
 
 func ConfigureOptions() error {
-	goflags.DefaultFileNormalizedStringSliceOptions.IsFromFile = func(s string) bool {
+	isFromFileFunc := func(s string) bool {
 		return !isTemplate(s)
 	}
+	goflags.FileNormalizedStringSliceOptions.IsFromFile = isFromFileFunc
+	goflags.FileStringSliceOptions.IsFromFile = isFromFileFunc
+	goflags.FileCommaSeparatedStringSliceOptions.IsFromFile = isFromFileFunc
 	return nil
 }
 
 // ParseOptions parses the command line flags provided by a user
 func ParseOptions(options *types.Options) {
 	// Check if stdin pipe was given
-	options.Stdin = hasStdin()
+	options.Stdin = !options.DisableStdin && fileutil.HasStdin()
+
+	// Read the inputs from env variables that not passed by flag.
+	readEnvInputVars(options)
 
 	// Read the inputs and configure the logging
 	configureOutput(options)
 	// Show the user the banner
 	showBanner()
 
-	if !filepath.IsAbs(options.TemplatesDirectory) {
+	if options.TemplatesDirectory != "" && !filepath.IsAbs(options.TemplatesDirectory) {
 		cwd, _ := os.Getwd()
 		options.TemplatesDirectory = filepath.Join(cwd, options.TemplatesDirectory)
 	}
@@ -47,15 +57,34 @@ func ParseOptions(options *types.Options) {
 		gologger.Info().Msgf("Current Version: %s\n", config.Version)
 		os.Exit(0)
 	}
+	if options.ShowVarDump {
+		vardump.EnableVarDump = true
+	}
 	if options.TemplatesVersion {
 		configuration, err := config.ReadConfiguration()
 		if err != nil {
 			gologger.Fatal().Msgf("Could not read template configuration: %s\n", err)
 		}
-		gologger.Info().Msgf("Current nuclei-templates version: %s (%s)\n", configuration.TemplateVersion, configuration.TemplatesDirectory)
+		gologger.Info().Msgf("Public nuclei-templates version: %s (%s)\n", configuration.TemplateVersion, configuration.TemplatesDirectory)
+		if configuration.CustomS3TemplatesDirectory != "" {
+			gologger.Info().Msgf("Custom S3 templates location: %s\n", configuration.CustomS3TemplatesDirectory)
+		}
+		if configuration.CustomGithubTemplatesDirectory != "" {
+			gologger.Info().Msgf("Custom Github templates location: %s ", configuration.CustomGithubTemplatesDirectory)
+		}
 		os.Exit(0)
 	}
-
+	if options.ShowActions {
+		gologger.Info().Msgf("Showing available headless actions: ")
+		for action := range engine.ActionStringToAction {
+			gologger.Print().Msgf("\t%s", action)
+		}
+		os.Exit(0)
+	}
+	if options.StoreResponseDir != DefaultDumpTrafficOutputFolder && !options.StoreResponse {
+		gologger.Debug().Msgf("Store response directory specified, enabling \"store-resp\" flag automatically\n")
+		options.StoreResponse = true
+	}
 	// Validate the options passed by the user and if any
 	// invalid options have been used, exit.
 	if err := validateOptions(options); err != nil {
@@ -77,18 +106,18 @@ func ParseOptions(options *types.Options) {
 	if err != nil {
 		gologger.Fatal().Msgf("Could not initialize protocols: %s\n", err)
 	}
-}
 
-// hasStdin returns true if we have stdin input
-func hasStdin() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
+	// Set Github token in env variable. runner.getGHClientWithToken() reads token from env
+	if options.GithubToken != "" && os.Getenv("GITHUB_TOKEN") != options.GithubToken {
+		os.Setenv("GITHUB_TOKEN", options.GithubToken)
 	}
-	if fi.Mode()&os.ModeNamedPipe == 0 {
-		return false
+
+	if options.UncoverQuery != nil {
+		options.Uncover = true
+		if len(options.UncoverEngine) == 0 {
+			options.UncoverEngine = append(options.UncoverEngine, "shodan")
+		}
 	}
-	return true
 }
 
 // validateOptions validates the configuration options passed
@@ -107,12 +136,18 @@ func validateOptions(options *types.Options) error {
 	if options.Verbose && options.Silent {
 		return errors.New("both verbose and silent mode specified")
 	}
+
+	if options.FollowHostRedirects && options.FollowRedirects {
+		return errors.New("both follow host redirects and follow redirects specified")
+	}
+	if options.ShouldFollowHTTPRedirects() && options.DisableRedirects {
+		return errors.New("both follow redirects and disable redirects specified")
+	}
 	// loading the proxy server list from file or cli and test the connectivity
 	if err := loadProxyServers(options); err != nil {
 		return err
 	}
 	if options.Validate {
-		options.Headless = true // required for correct validation of headless templates
 		validateTemplatePaths(options.TemplatesDirectory, options.Templates, options.Workflows)
 	}
 
@@ -122,6 +157,42 @@ func validateOptions(options *types.Options) error {
 			return errors.New("if a client certification option is provided, then all three must be provided")
 		}
 		validateCertificatePaths([]string{options.ClientCertFile, options.ClientKeyFile, options.ClientCAFile})
+	}
+	// Verify aws secrets are passed if s3 template bucket passed
+	if options.AwsBucketName != "" && options.UpdateTemplates {
+		var missing []string
+		if options.AwsAccessKey == "" {
+			missing = append(missing, "AWS_ACCESS_KEY")
+		}
+		if options.AwsSecretKey == "" {
+			missing = append(missing, "AWS_SECRET_KEY")
+		}
+		if options.AwsRegion == "" {
+			missing = append(missing, "AWS_REGION")
+		}
+		if missing != nil {
+			return fmt.Errorf("aws s3 bucket details are missing. Please provide %s", strings.Join(missing, ","))
+		}
+	}
+
+	// verify that a valid ip version type was selected (4, 6)
+	if len(options.IPVersion) == 0 {
+		// add ipv4 as default
+		options.IPVersion = append(options.IPVersion, "4")
+	}
+	var useIPV4, useIPV6 bool
+	for _, ipv := range options.IPVersion {
+		switch ipv {
+		case "4":
+			useIPV4 = true
+		case "6":
+			useIPV6 = true
+		default:
+			return fmt.Errorf("unsupported ip version: %s", ipv)
+		}
+	}
+	if !useIPV4 && !useIPV6 {
+		return errors.New("ipv4 and/or ipv6 must be selected")
 	}
 
 	return nil
@@ -200,4 +271,17 @@ func validateCertificatePaths(certificatePaths []string) {
 			break
 		}
 	}
+}
+
+// Read the input from env and set options
+func readEnvInputVars(options *types.Options) {
+	options.GithubToken = os.Getenv("GITHUB_TOKEN")
+	repolist := os.Getenv("GITHUB_TEMPLATE_REPO")
+	if repolist != "" {
+		options.GithubTemplateRepo = append(options.GithubTemplateRepo, stringsutil.SplitAny(repolist, ",")...)
+	}
+	options.AwsAccessKey = os.Getenv("AWS_ACCESS_KEY")
+	options.AwsSecretKey = os.Getenv("AWS_SECRET_KEY")
+	options.AwsBucketName = os.Getenv("AWS_TEMPLATE_BUCKET")
+	options.AwsRegion = os.Getenv("AWS_REGION")
 }

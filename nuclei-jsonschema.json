@@ -72,7 +72,7 @@
         "metadata": {
           "patternProperties": {
             ".*": {
-              "type": "string"
+              "additionalProperties": true
             }
           },
           "type": "object",
@@ -103,7 +103,8 @@
         "low",
         "medium",
         "high",
-        "critical"
+        "critical",
+        "unknown"
       ],
       "type": "string",
       "title": "severity of the template",
@@ -119,9 +120,20 @@
         }
       ]
     },
+    "userAgent.UserAgentHolder": {
+      "enum": [
+        "off",
+        "default",
+        "custom"
+      ],
+      "type": "string",
+      "title": "userAgent for the headless",
+      "description": "userAgent for the headless http request"
+    },
     "extractors.Extractor": {
       "required": [
-        "type"
+        "type",
+        "DSL"
       ],
       "properties": {
         "name": {
@@ -175,6 +187,12 @@
           "title": "optional attribute to extract from xpath",
           "description": "Optional attribute to extract from response XPath"
         },
+        "DSL": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "part": {
           "type": "string",
           "title": "part of response to extract data from",
@@ -199,7 +217,8 @@
         "regex",
         "kval",
         "xpath",
-        "json"
+        "json",
+        "dsl"
       ],
       "type": "string",
       "title": "type of the extractor",
@@ -333,6 +352,11 @@
       "title": "type of the attack",
       "description": "Type of the attack"
     },
+    "variables.Variable": {
+      "properties": {},
+      "additionalProperties": false,
+      "type": "object"
+    },
     "dns.DNSRequestTypeHolder": {
       "enum": [
         "A",
@@ -439,6 +463,10 @@
       "type": "object"
     },
     "file.Request": {
+      "required": [
+        "Archive",
+        "MimeType"
+      ],
       "properties": {
         "matchers": {
           "items": {
@@ -487,9 +515,15 @@
           "description": "ID is the optional ID for the request"
         },
         "max-size": {
-          "type": "integer",
+          "type": "string",
           "title": "max size data to run request on",
           "description": "Maximum size of the file to run request on"
+        },
+        "Archive": {
+          "type": "boolean"
+        },
+        "MimeType": {
+          "type": "boolean"
         },
         "no-recursive": {
           "type": "boolean",
@@ -530,6 +564,17 @@
           "type": "array",
           "title": "list of actions for headless request",
           "description": "List of actions to run for headless request"
+        },
+        "user_agent": {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "$ref": "#/definitions/userAgent.UserAgentHolder",
+          "title": "user agent for the headless request",
+          "description": "User agent for the headless request"
+        },
+        "custom_user_agent": {
+          "type": "string",
+          "title": "custom user agent for the headless request",
+          "description": "Custom user agent for the headless request"
         },
         "matchers": {
           "items": {
@@ -609,7 +654,7 @@
         "waitload",
         "getresource",
         "extract",
-        "set-method",
+        "setmethod",
         "addheader",
         "setheader",
         "deleteheader",
@@ -763,6 +808,15 @@
           "title": "maximum http response body size",
           "description": "Maximum size of http response body to read in bytes"
         },
+        "fuzzing": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/fuzz.Rule"
+          },
+          "type": "array",
+          "title": "fuzzin rules for http fuzzing",
+          "description": "Fuzzing describes rule schema to fuzz http requests"
+        },
         "signature": {
           "$schema": "http://json-schema.org/draft-04/schema#",
           "$ref": "#/definitions/http.SignatureTypeHolder",
@@ -774,10 +828,20 @@
           "title": "optional cookie reuse enable",
           "description": "Optional setting that enables cookie reuse"
         },
+        "read-all": {
+          "type": "boolean",
+          "title": "force read all body",
+          "description": "Enables force reading of entire unsafe http request body"
+        },
         "redirects": {
           "type": "boolean",
           "title": "follow http redirects",
           "description": "Specifies whether redirects should be followed by the HTTP Client"
+        },
+        "host-redirects": {
+          "type": "boolean",
+          "title": "follow same host http redirects",
+          "description": "Specifies whether redirects to the same host should be followed by the HTTP Client"
         },
         "pipeline": {
           "type": "boolean",
@@ -813,6 +877,16 @@
           "type": "boolean",
           "title": "iterate all the values",
           "description": "Iterates all the values extracted from internal extractors"
+        },
+        "digest-username": {
+          "type": "string",
+          "title": "specifies the username for digest authentication",
+          "description": "Optional parameter which specifies the username for digest auth"
+        },
+        "digest-password": {
+          "type": "string",
+          "title": "specifies the password for digest authentication",
+          "description": "Optional parameter which specifies the password for digest auth"
         }
       },
       "additionalProperties": false,
@@ -825,6 +899,72 @@
       "type": "string",
       "title": "type of the signature",
       "description": "Type of the signature"
+    },
+    "fuzz.Rule": {
+      "properties": {
+        "type": {
+          "enum": [
+            "replace",
+            "prefix",
+            "postfix",
+            "infix"
+          ],
+          "type": "string",
+          "title": "type of rule",
+          "description": "Type of fuzzing rule to perform"
+        },
+        "part": {
+          "enum": [
+            "query"
+          ],
+          "type": "string",
+          "title": "part of rule",
+          "description": "Part of request rule to fuzz"
+        },
+        "mode": {
+          "enum": [
+            "single",
+            "multiple"
+          ],
+          "type": "string",
+          "title": "mode of rule",
+          "description": "Mode of request rule to fuzz"
+        },
+        "keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "keys of parameters to fuzz",
+          "description": "Keys of parameters to fuzz"
+        },
+        "keys-regex": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "keys regex to fuzz",
+          "description": "Regex of parameter keys to fuzz"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "values regex to fuzz",
+          "description": "Regex of parameter values to fuzz"
+        },
+        "fuzz": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "payloads of fuzz rule",
+          "description": "Payloads to perform fuzzing substitutions with"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "network.Input": {
       "properties": {
@@ -981,7 +1121,7 @@
             "tls13"
           ],
           "type": "string",
-          "title": "TLS version",
+          "title": "Min. TLS version",
           "description": "Minimum tls version - automatic if not specified."
         },
         "max_version": {
@@ -993,7 +1133,7 @@
             "tls13"
           ],
           "type": "string",
-          "title": "TLS version",
+          "title": "Max. TLS version",
           "description": "Max tls version - automatic if not specified."
         },
         "cipher_suites": {
@@ -1001,6 +1141,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "scan_mode": {
+          "enum": [
+            "ctls",
+            "ztls",
+            "auto"
+          ],
+          "type": "string",
+          "title": "Scan Mode",
+          "description": "Scan Mode - auto if not specified."
         }
       },
       "additionalProperties": false,
@@ -1249,6 +1399,12 @@
           "$ref": "#/definitions/http.SignatureTypeHolder",
           "title": "signature is the http request signature method",
           "description": "Signature is the HTTP Request signature Method"
+        },
+        "variables": {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "$ref": "#/definitions/variables.Variable",
+          "title": "variables for the http request",
+          "description": "Variables contains any variables for the current request"
         }
       },
       "additionalProperties": false,
@@ -1257,9 +1413,18 @@
     "workflows.Matcher": {
       "properties": {
         "name": {
+          "$ref": "#/definitions/stringslice.StringSlice",
+          "title": "name of items to match",
+          "description": "Name of items to match"
+        },
+        "condition": {
+          "enum": [
+            "and",
+            "or"
+          ],
           "type": "string",
-          "title": "name of item to match",
-          "description": "Name of item to match"
+          "title": "condition between names",
+          "description": "Condition between the names"
         },
         "subtemplates": {
           "items": {

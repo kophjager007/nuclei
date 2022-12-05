@@ -1,12 +1,15 @@
 package testutils
 
 import (
-	"go.uber.org/ratelimit"
+	"context"
+	"time"
+
+	"github.com/projectdiscovery/ratelimit"
 
 	"github.com/logrusorgru/aurora"
 
 	"github.com/projectdiscovery/gologger/levels"
-	"github.com/projectdiscovery/nuclei/v2/pkg/catalog"
+	"github.com/projectdiscovery/nuclei/v2/pkg/catalog/disk"
 	"github.com/projectdiscovery/nuclei/v2/pkg/model"
 	"github.com/projectdiscovery/nuclei/v2/pkg/model/types/severity"
 	"github.com/projectdiscovery/nuclei/v2/pkg/output"
@@ -58,11 +61,13 @@ var DefaultOptions = &types.Options{
 	Templates:                  []string{},
 	ExcludedTemplates:          []string{},
 	CustomHeaders:              []string{},
-	InteractshURL:              "https://interact.sh",
+	InteractshURL:              "https://oast.fun",
 	InteractionsCacheSize:      5000,
 	InteractionsEviction:       60,
 	InteractionsCoolDownPeriod: 5,
 	InteractionsPollDuration:   5,
+	GithubTemplateRepo:         []string{},
+	GithubToken:                "",
 }
 
 // TemplateInfo contains info for a mock executed template.
@@ -85,8 +90,8 @@ func NewMockExecuterOptions(options *types.Options, info *TemplateInfo) *protoco
 		ProjectFile:  nil,
 		IssuesClient: nil,
 		Browser:      nil,
-		Catalog:      catalog.New(options.TemplatesDirectory),
-		RateLimiter:  ratelimit.New(options.RateLimit),
+		Catalog:      disk.NewCatalog(options.TemplatesDirectory),
+		RateLimiter:  ratelimit.New(context.Background(), uint(options.RateLimit), time.Second),
 	}
 	return executerOpts
 }
@@ -135,6 +140,9 @@ func (m *MockOutputWriter) Request(templateID, url, requestType string, err erro
 // WriteFailure writes the event to file and/or screen.
 func (m *MockOutputWriter) WriteFailure(result output.InternalEvent) error {
 	return nil
+}
+func (m *MockOutputWriter) WriteStoreDebugData(host, templateID, eventType string, data string) {
+
 }
 
 type MockProgressClient struct{}

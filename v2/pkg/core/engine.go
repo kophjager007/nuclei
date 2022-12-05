@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/contextargs"
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
 )
 
@@ -29,7 +30,9 @@ type InputProvider interface {
 	Count() int64
 	// Scan iterates the input and each found item is passed to the
 	// callback consumer.
-	Scan(callback func(value string))
+	Scan(callback func(value *contextargs.MetaInput) bool)
+	// Set adds item to input provider
+	Set(value string)
 }
 
 // New returns a new Engine instance
@@ -56,4 +59,9 @@ func (e *Engine) SetExecuterOptions(options protocols.ExecuterOptions) {
 // ExecuterOptions returns protocols.ExecuterOptions for nuclei engine.
 func (e *Engine) ExecuterOptions() protocols.ExecuterOptions {
 	return e.executerOpts
+}
+
+// WorkPool returns the worker pool for the engine
+func (e *Engine) WorkPool() *WorkPool {
+	return e.workPool
 }

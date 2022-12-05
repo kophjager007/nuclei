@@ -1,13 +1,15 @@
 package headless
 
 import (
+	"github.com/corpix/uarand"
 	"github.com/pkg/errors"
 
-	"github.com/projectdiscovery/fileutil"
+	useragent "github.com/projectdiscovery/nuclei/v2/pkg/model/types/userAgent"
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/generators"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/headless/engine"
+	fileutil "github.com/projectdiscovery/utils/file"
 )
 
 // Request contains a Headless protocol request to be made from a template
@@ -32,6 +34,15 @@ type Request struct {
 	// description: |
 	//   Steps is the list of actions to run for headless request
 	Steps []*engine.Action `yaml:"steps,omitempty" jsonschema:"title=list of actions for headless request,description=List of actions to run for headless request"`
+
+	// descriptions: |
+	// 	 User-Agent is the type of user-agent to use for the request.
+	UserAgent useragent.UserAgentHolder `yaml:"user_agent,omitempty" jsonschema:"title=user agent for the headless request,description=User agent for the headless request"`
+
+	// description: |
+	// 	 If UserAgent is set to custom, customUserAgent is the custom user-agent to use for the request.
+	CustomUserAgent   string `yaml:"custom_user_agent,omitempty" jsonschema:"title=custom user agent for the headless request,description=Custom user agent for the headless request"`
+	compiledUserAgent string
 
 	// Operators for the current request go here.
 	operators.Operators `yaml:",inline,omitempty"`
@@ -84,14 +95,31 @@ func (request *Request) Compile(options *protocols.ExecuterOptions) error {
 
 	if len(request.Payloads) > 0 {
 		var err error
-		request.generator, err = generators.New(request.Payloads, request.AttackType.Value, options.TemplatePath, options.Catalog)
+		request.generator, err = generators.New(request.Payloads, request.AttackType.Value, options.TemplatePath, options.Options.TemplatesDirectory, options.Options.Sandbox, options.Catalog, options.Options.AttackType)
 		if err != nil {
 			return errors.Wrap(err, "could not parse payloads")
 		}
 	}
 
+	// Compile User-Agent
+	switch request.UserAgent.Value {
+	case useragent.Off:
+		request.compiledUserAgent = " "
+	case useragent.Default:
+		request.compiledUserAgent = ""
+	case useragent.Custom:
+		if request.CustomUserAgent == "" {
+			return errors.New("please set custom_user_agent in the template")
+		}
+		request.compiledUserAgent = request.CustomUserAgent
+	case useragent.Random:
+		request.compiledUserAgent = uarand.GetRandom()
+	}
+
 	if len(request.Matchers) > 0 || len(request.Extractors) > 0 {
 		compiled := &request.Operators
+		compiled.ExcludeMatchers = options.ExcludeMatchers
+		compiled.TemplateID = options.TemplateID
 		if err := compiled.Compile(); err != nil {
 			return errors.Wrap(err, "could not compile operators")
 		}

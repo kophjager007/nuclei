@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"path"
 	"strings"
 
 	"github.com/projectdiscovery/rawhttp/client"
+	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
 // Request defines a basic HTTP raw request
@@ -40,18 +40,26 @@ func Parse(request, baseURL string, unsafe bool) (*Request, error) {
 		rawRequest.UnsafeRawBytes = []byte(request)
 	}
 	reader := bufio.NewReader(strings.NewReader(request))
+read_line:
 	s, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("could not read request: %w", err)
 	}
+	// ignore all annotations
+	if stringsutil.HasPrefixAny(s, "@") {
+		goto read_line
+	}
 
 	parts := strings.Split(s, " ")
+	if len(parts) == 2 {
+		parts = []string{parts[0], "", parts[1]}
+	}
 	if len(parts) < 3 && !unsafe {
 		return nil, fmt.Errorf("malformed request supplied")
 	}
 	// Check if we have also a path from the passed base URL and if yes,
 	// append that to the unsafe request as well.
-	if parsedURL.Path != "" && strings.HasPrefix(parts[1], "/") && parts[1] != parsedURL.Path {
+	if parsedURL.Path != "" && parts[1] != "" && parts[1] != parsedURL.Path {
 		rawRequest.UnsafeRawBytes = fixUnsafeRequestPath(parsedURL, parts[1], rawRequest.UnsafeRawBytes)
 	}
 	// Set the request Method
@@ -125,6 +133,9 @@ func Parse(request, baseURL string, unsafe bool) (*Request, error) {
 			rawRequest.Path = strings.TrimSuffix(rawRequest.Path, "/")
 		}
 		rawRequest.FullURL = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, strings.TrimSpace(hostURL), rawRequest.Path)
+		if parsedURL.RawQuery != "" {
+			rawRequest.FullURL = fmt.Sprintf("%s?%s", rawRequest.FullURL, parsedURL.RawQuery)
+		}
 
 		// If raw request doesn't have a Host header and isn't marked unsafe,
 		// this will generate the Host header from the parsed baseURL
@@ -134,7 +145,7 @@ func Parse(request, baseURL string, unsafe bool) (*Request, error) {
 	}
 
 	// Set the request body
-	b, err := ioutil.ReadAll(reader)
+	b, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("could not read request body: %w", err)
 	}
@@ -146,9 +157,14 @@ func Parse(request, baseURL string, unsafe bool) (*Request, error) {
 }
 
 func fixUnsafeRequestPath(baseURL *url.URL, requestPath string, request []byte) []byte {
-	fixedPath := path.Join(baseURL.Path, requestPath)
-	fixed := bytes.Replace(request, []byte(requestPath), []byte(fixedPath), 1)
-	return fixed
+	var fixedPath string
+	if stringsutil.HasPrefixAny(requestPath, "/") {
+		fixedPath = path.Join(baseURL.Path, requestPath)
+	} else {
+		fixedPath = fmt.Sprintf("%s%s", baseURL.Path, requestPath)
+	}
+
+	return bytes.Replace(request, []byte(requestPath), []byte(fixedPath), 1)
 }
 
 // TryFillCustomHeaders after the Host header

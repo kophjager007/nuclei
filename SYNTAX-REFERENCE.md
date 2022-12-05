@@ -132,6 +132,7 @@ dns:
           regex:
             - ec2-[-\d]+\.compute[-\d]*\.amazonaws\.com
             - ec2-[-\d]+\.[\w\d\-]+\.compute[-\d]*\.amazonaws\.com
+          dsl: []
     name: '{{FQDN}}'
     type: CNAME
     class: inet
@@ -164,8 +165,11 @@ file:
         - type: regex
           regex:
             - amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+          dsl: []
     extensions:
         - all
+    archive: false
+    mimetype: false
 ```
 
 
@@ -311,6 +315,19 @@ Valid values:
 
 
   - <code>AWS</code>
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>variables</code>  <i><a href="#variablesvariable">variables.Variable</a></i>
+
+</div>
+<div class="dt">
+
+Variables contains any variables for the current request.
+
 </div>
 
 <hr />
@@ -489,7 +506,7 @@ Severity of the template.
 
 <div class="dd">
 
-<code>metadata</code>  <i>map[string]string</i>
+<code>metadata</code>  <i>map[string]interface{}</i>
 
 </div>
 <div class="dt">
@@ -572,6 +589,8 @@ Appears in:
 
 - <code><a href="#workflowsworkflowtemplate">workflows.WorkflowTemplate</a>.tags</code>
 
+- <code><a href="#workflowsmatcher">workflows.Matcher</a>.name</code>
+
 
 ```yaml
 <username>
@@ -633,6 +652,8 @@ Enum Values:
   - <code>high</code>
 
   - <code>critical</code>
+
+  - <code>unknown</code>
 </div>
 
 <hr />
@@ -1200,6 +1221,19 @@ max-size: 2048
 
 <div class="dd">
 
+<code>fuzzing</code>  <i>[]<a href="#fuzzrule">fuzz.Rule</a></i>
+
+</div>
+<div class="dt">
+
+Fuzzing describes schema to fuzz http requests
+
+</div>
+
+<hr />
+
+<div class="dd">
+
 <code>signature</code>  <i><a href="#signaturetypeholder">SignatureTypeHolder</a></i>
 
 </div>
@@ -1232,12 +1266,41 @@ all requests defined in raw section.
 
 <div class="dd">
 
+<code>read-all</code>  <i>bool</i>
+
+</div>
+<div class="dt">
+
+Enables force reading of the entire raw unsafe request body ignoring
+any specified content length headers.
+
+</div>
+
+<hr />
+
+<div class="dd">
+
 <code>redirects</code>  <i>bool</i>
 
 </div>
 <div class="dt">
 
 Redirects specifies whether redirects should be followed by the HTTP Client.
+
+This can be used in conjunction with `max-redirects` to control the HTTP request redirects.
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>host-redirects</code>  <i>bool</i>
+
+</div>
+<div class="dt">
+
+Redirects specifies whether only redirects to the same host should be followed by the HTTP Client.
 
 This can be used in conjunction with `max-redirects` to control the HTTP request redirects.
 
@@ -1340,6 +1403,32 @@ SkipVariablesCheck skips the check for unresolved variables in request
 <div class="dt">
 
 IterateAll iterates all the values extracted from internal extractors
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>digest-username</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+DigestAuthUsername specifies the username for digest authentication
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>digest-password</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+DigestAuthPassword specifies the password for digest authentication
 
 </div>
 
@@ -2094,6 +2183,8 @@ Enum Values:
   - <code>xpath</code>
 
   - <code>json</code>
+
+  - <code>dsl</code>
 </div>
 
 <hr />
@@ -2204,6 +2295,197 @@ Enum Values:
 
 
 
+## fuzz.Rule
+Rule is a single rule which describes how to fuzz the request
+
+Appears in:
+
+
+- <code><a href="#httprequest">http.Request</a>.fuzzing</code>
+
+
+
+
+
+<hr />
+
+<div class="dd">
+
+<code>type</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+Type is the type of fuzzing rule to perform.
+
+replace replaces the values entirely. prefix prefixes the value. postfix postfixes the value
+and infix places between the values.
+
+
+Valid values:
+
+
+  - <code>replace</code>
+
+  - <code>prefix</code>
+
+  - <code>postfix</code>
+
+  - <code>infix</code>
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>part</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+Part is the part of request to fuzz.
+
+query fuzzes the query part of url. More parts will be added later.
+
+
+Valid values:
+
+
+  - <code>query</code>
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>mode</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+Mode is the mode of fuzzing to perform.
+
+single fuzzes one value at a time. multiple fuzzes all values at same time.
+
+
+Valid values:
+
+
+  - <code>single</code>
+
+  - <code>multiple</code>
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>keys</code>  <i>[]string</i>
+
+</div>
+<div class="dt">
+
+Keys is the optional list of key named parameters to fuzz.
+
+
+
+Examples:
+
+
+```yaml
+# Examples of keys
+keys:
+    - url
+    - file
+    - host
+```
+
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>keys-regex</code>  <i>[]string</i>
+
+</div>
+<div class="dt">
+
+KeysRegex is the optional list of regex key parameters to fuzz.
+
+
+
+Examples:
+
+
+```yaml
+# Examples of key regex
+keys-regex:
+    - url.*
+```
+
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>values</code>  <i>[]string</i>
+
+</div>
+<div class="dt">
+
+Values is the optional list of regex value parameters to fuzz.
+
+
+
+Examples:
+
+
+```yaml
+# Examples of value regex
+values:
+    - https?://.*
+```
+
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>fuzz</code>  <i>[]string</i>
+
+</div>
+<div class="dt">
+
+Fuzz is the list of payloads to perform substitutions with.
+
+
+
+Examples:
+
+
+```yaml
+# Examples of fuzz
+fuzz:
+    - '{{ssrf}}'
+    - '{{interactsh-url}}'
+    - example-value
+```
+
+
+</div>
+
+<hr />
+
+
+
+
+
 ## SignatureTypeHolder
 SignatureTypeHolder is used to hold internal type of the signature
 
@@ -2233,6 +2515,7 @@ extractors:
       regex:
         - ec2-[-\d]+\.compute[-\d]*\.amazonaws\.com
         - ec2-[-\d]+\.[\w\d\-]+\.compute[-\d]*\.amazonaws\.com
+      dsl: []
 name: '{{FQDN}}'
 type: CNAME
 class: inet
@@ -2552,8 +2835,11 @@ extractors:
     - type: regex
       regex:
         - amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      dsl: []
 extensions:
     - all
+archive: false
+mimetype: false
 ```
 
 Part Definitions: 
@@ -2628,7 +2914,7 @@ Valid values:
 </div>
 <div class="dt">
 
-Extensions is the list of extensions to perform matching on.
+Extensions is the list of extensions or mime types to perform matching on.
 
 
 
@@ -2654,7 +2940,7 @@ extensions:
 </div>
 <div class="dt">
 
-DenyList is the list of file, directories or extensions to deny during matching.
+DenyList is the list of file, directories, mime types or extensions to deny during matching.
 
 By default, it contains some non-interesting extensions that are hardcoded
 in nuclei.
@@ -2691,15 +2977,16 @@ ID is the optional id of the request
 
 <div class="dd">
 
-<code>max-size</code>  <i>int</i>
+<code>max-size</code>  <i>string</i>
 
 </div>
 <div class="dt">
 
 MaxSize is the maximum size of the file to run request on.
 
-By default, nuclei will process 5 MB files and not go more than that.
+By default, nuclei will process 1 GB of content and not go more than that.
 It can be set to much lower or higher depending on use.
+If set to "no" then all content will be processed
 
 
 
@@ -2707,7 +2994,7 @@ Examples:
 
 
 ```yaml
-max-size: 2048
+max-size: 5Mb
 ```
 
 
@@ -3204,6 +3491,34 @@ Steps is the list of actions to run for headless request
 
 <div class="dd">
 
+<code>user_agent</code>  <i><a href="#useragentuseragentholder">userAgent.UserAgentHolder</a></i>
+
+</div>
+<div class="dt">
+
+descriptions: |
+ 	 User-Agent is the type of user-agent to use for the request.
+
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>custom_user_agent</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+description: |
+ 	 If UserAgent is set to custom, customUserAgent is the custom user-agent to use for the request.
+
+</div>
+
+<hr />
+
+<div class="dd">
+
 <code>matchers</code>  <i>[]<a href="#matchersmatcher">matchers.Matcher</a></i>
 
 </div>
@@ -3416,6 +3731,48 @@ Enum Values:
 
 
 
+## userAgent.UserAgentHolder
+UserAgentHolder holds a UserAgent type. Required for un/marshalling purposes
+
+Appears in:
+
+
+- <code><a href="#headlessrequest">headless.Request</a>.user_agent</code>
+
+
+
+
+
+<hr />
+
+<div class="dd">
+
+<code></code>  <i>UserAgent</i>
+
+</div>
+<div class="dt">
+
+
+
+
+Enum Values:
+
+
+  - <code>random</code>
+
+  - <code>off</code>
+
+  - <code>default</code>
+
+  - <code>custom</code>
+</div>
+
+<hr />
+
+
+
+
+
 ## ssl.Request
 Request is a request for the SSL protocol
 
@@ -3563,6 +3920,28 @@ Valid values:
 
 Client Cipher Suites  - auto if not specified.
 
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>scan_mode</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+Tls Scan Mode - auto if not specified
+
+
+Valid values:
+
+
+  - <code>ctls</code>
+
+  - <code>ztls</code>
+
+  - <code>auto</code>
 </div>
 
 <hr />
@@ -3994,13 +4373,34 @@ Appears in:
 
 <div class="dd">
 
-<code>name</code>  <i>string</i>
+<code>name</code>  <i><a href="#stringslicestringslice">stringslice.StringSlice</a></i>
 
 </div>
 <div class="dt">
 
-Name is the name of the item to match.
+Name is the name of the items to match.
 
+</div>
+
+<hr />
+
+<div class="dd">
+
+<code>condition</code>  <i>string</i>
+
+</div>
+<div class="dt">
+
+Condition is the optional condition between names. By default,
+the condition is assumed to be OR.
+
+
+Valid values:
+
+
+  - <code>and</code>
+
+  - <code>or</code>
 </div>
 
 <hr />
@@ -4029,6 +4429,21 @@ Appears in:
 
 
 - <code><a href="#template">Template</a>.signature</code>
+
+
+
+
+
+
+
+## variables.Variable
+Variable is a key-value pair of strings that can be used
+ throughout template.
+
+Appears in:
+
+
+- <code><a href="#template">Template</a>.variables</code>
 
 
 

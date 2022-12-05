@@ -6,8 +6,8 @@ import (
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
-	"github.com/openrdap/rdap"
 	"github.com/pkg/errors"
+	"github.com/projectdiscovery/rdap"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators"
@@ -15,9 +15,12 @@ import (
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators/matchers"
 	"github.com/projectdiscovery/nuclei/v2/pkg/output"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/contextargs"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/eventcreator"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/responsehighlighter"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/replacer"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/utils/vardump"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/whois/rdapclientpool"
 	templateTypes "github.com/projectdiscovery/nuclei/v2/pkg/templates/types"
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
 )
@@ -55,10 +58,12 @@ func (request *Request) Compile(options *protocols.ExecuterOptions) error {
 	}
 
 	request.options = options
-	request.client = &rdap.Client{}
+	request.client, _ = rdapclientpool.Get(options.Options, nil)
 
 	if len(request.Matchers) > 0 || len(request.Extractors) > 0 {
 		compiled := &request.Operators
+		compiled.ExcludeMatchers = options.ExcludeMatchers
+		compiled.TemplateID = options.TemplateID
 		if err := compiled.Compile(); err != nil {
 			return errors.Wrap(err, "could not compile operators")
 		}
@@ -78,9 +83,14 @@ func (request *Request) GetID() string {
 }
 
 // ExecuteWithResults executes the protocol requests and returns results instead of writing them.
-func (request *Request) ExecuteWithResults(input string, dynamicValues, previous output.InternalEvent, callback protocols.OutputEventCallback) error {
+func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicValues, previous output.InternalEvent, callback protocols.OutputEventCallback) error {
 	// generate variables
-	variables := generateVariables(input)
+	variables := generateVariables(input.MetaInput.Input)
+
+	if vardump.EnableVarDump {
+		gologger.Debug().Msgf("Protocol request variables: \n%s\n", vardump.DumpVariables(variables))
+	}
+
 	// and replace placeholders
 	query := replacer.Replace(request.Query, variables)
 	// build an rdap request

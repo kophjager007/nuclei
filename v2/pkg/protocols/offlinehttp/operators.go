@@ -12,6 +12,7 @@ import (
 	"github.com/projectdiscovery/nuclei/v2/pkg/output"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/responsehighlighter"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/utils"
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
 )
 
@@ -58,7 +59,7 @@ func getStatusCode(data map[string]interface{}) (int, bool) {
 // Extract performs extracting operation for an extractor on model and returns true or false.
 func (request *Request) Extract(data map[string]interface{}, extractor *extractors.Extractor) map[string]struct{} {
 	item, ok := getMatchPart(extractor.Part, data)
-	if !ok && extractor.Type.ExtractorType != extractors.KValExtractor {
+	if !ok && !extractors.SupportsMap(extractor) {
 		return nil
 	}
 	switch extractor.GetType() {
@@ -66,6 +67,8 @@ func (request *Request) Extract(data map[string]interface{}, extractor *extracto
 		return extractor.ExtractRegex(item)
 	case extractors.KValExtractor:
 		return extractor.ExtractKval(data)
+	case extractors.DSLExtractor:
+		return extractor.ExtractDSL(data)
 	}
 	return nil
 }
@@ -110,7 +113,6 @@ func (request *Request) responseToDSLMap(resp *http.Response, host, matched, raw
 	data["matched"] = matched
 	data["request"] = rawReq
 	data["response"] = rawResp
-	data["content_length"] = resp.ContentLength
 	data["status_code"] = resp.StatusCode
 	data["body"] = body
 	data["type"] = request.Type().String()
@@ -119,6 +121,8 @@ func (request *Request) responseToDSLMap(resp *http.Response, host, matched, raw
 	data["template-id"] = request.options.TemplateID
 	data["template-info"] = request.options.TemplateInfo
 	data["template-path"] = request.options.TemplatePath
+	data["content_length"] = utils.CalculateContentLength(resp.ContentLength, int64(len(body)))
+
 	return data
 }
 

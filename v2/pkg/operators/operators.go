@@ -1,12 +1,17 @@
 package operators
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators/extractors"
 	"github.com/projectdiscovery/nuclei/v2/pkg/operators/matchers"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/generators"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/utils/excludematchers"
+	sliceutil "github.com/projectdiscovery/utils/slice"
 )
 
 // Operators contains the operators that can be applied on protocols
@@ -31,6 +36,11 @@ type Operators struct {
 	MatchersCondition string `yaml:"matchers-condition,omitempty" jsonschema:"title=condition between the matchers,description=Conditions between the matchers,enum=and,enum=or"`
 	// cached variables that may be used along with request.
 	matchersCondition matchers.ConditionType
+
+	// TemplateID is the ID of the template for matcher
+	TemplateID string `json:"-" yaml:"-" jsonschema:"-"`
+	// ExcludeMatchers is a list of excludeMatchers items
+	ExcludeMatchers *excludematchers.ExcludeMatchers `json:"-" yaml:"-" jsonschema:"-"`
 }
 
 // Compile compiles the operators as well as their corresponding matchers and extractors
@@ -80,6 +90,23 @@ type Result struct {
 
 	// Optional lineCounts for file protocol
 	LineCount string
+}
+
+func (result *Result) HasMatch(name string) bool {
+	return result.hasItem(name, result.Matches)
+}
+
+func (result *Result) HasExtract(name string) bool {
+	return result.hasItem(name, result.Extracts)
+}
+
+func (result *Result) hasItem(name string, m map[string][]string) bool {
+	for matchName := range m {
+		if strings.EqualFold(name, matchName) {
+			return true
+		}
+	}
+	return false
 }
 
 // MakeDynamicValuesCallback takes an input dynamic values map and calls
@@ -145,22 +172,16 @@ func (r *Result) Merge(result *Result) {
 	}
 
 	for k, v := range result.Matches {
-		r.Matches[k] = v
+		r.Matches[k] = sliceutil.Dedupe(append(r.Matches[k], v...))
 	}
 	for k, v := range result.Extracts {
-		r.Extracts[k] = v
+		r.Extracts[k] = sliceutil.Dedupe(append(r.Extracts[k], v...))
 	}
 
 	r.outputUnique = make(map[string]struct{})
 	output := r.OutputExtracts
 	r.OutputExtracts = make([]string, 0, len(output))
 	for _, v := range output {
-		if _, ok := r.outputUnique[v]; !ok {
-			r.outputUnique[v] = struct{}{}
-			r.OutputExtracts = append(r.OutputExtracts, v)
-		}
-	}
-	for _, v := range result.OutputExtracts {
 		if _, ok := r.outputUnique[v]; !ok {
 			r.outputUnique[v] = struct{}{}
 			r.OutputExtracts = append(r.OutputExtracts, v)
@@ -201,7 +222,6 @@ func (operators *Operators) Execute(data map[string]interface{}, match MatchFunc
 	// Start with the extractors first and evaluate them.
 	for _, extractor := range operators.Extractors {
 		var extractorResults []string
-
 		for match := range extract(data, extractor) {
 			extractorResults = append(extractorResults, match)
 
@@ -223,7 +243,31 @@ func (operators *Operators) Execute(data map[string]interface{}, match MatchFunc
 		}
 	}
 
+	// expose dynamic values to same request matchers
+	if len(result.DynamicValues) > 0 {
+		dataDynamicValues := make(map[string]interface{})
+		for dynName, dynValues := range result.DynamicValues {
+			if len(dynValues) > 1 {
+				for dynIndex, dynValue := range dynValues {
+					dynKeyName := fmt.Sprintf("%s%d", dynName, dynIndex)
+					dataDynamicValues[dynKeyName] = dynValue
+				}
+				dataDynamicValues[dynName] = dynValues
+			} else {
+				dataDynamicValues[dynName] = dynValues[0]
+			}
+
+		}
+		data = generators.MergeMaps(data, dataDynamicValues)
+	}
+
 	for matcherIndex, matcher := range operators.Matchers {
+		// Skip matchers that are in the blocklist
+		if operators.ExcludeMatchers != nil {
+			if operators.ExcludeMatchers.Match(operators.TemplateID, matcher.Name) {
+				continue
+			}
+		}
 		if isMatch, matched := match(data, matcher); isMatch {
 			if isDebug { // matchers without an explicit name or with AND condition should only be made visible if debug is enabled
 				matcherName := getMatcherName(matcher, matcherIndex)

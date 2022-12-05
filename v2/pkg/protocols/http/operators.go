@@ -12,6 +12,7 @@ import (
 	"github.com/projectdiscovery/nuclei/v2/pkg/output"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/common/helpers/responsehighlighter"
+	"github.com/projectdiscovery/nuclei/v2/pkg/protocols/utils"
 	"github.com/projectdiscovery/nuclei/v2/pkg/types"
 )
 
@@ -58,7 +59,7 @@ func getStatusCode(data map[string]interface{}) (int, bool) {
 // Extract performs extracting operation for an extractor on model and returns true or false.
 func (request *Request) Extract(data map[string]interface{}, extractor *extractors.Extractor) map[string]struct{} {
 	item, ok := request.getMatchPart(extractor.Part, data)
-	if !ok && extractor.Type.ExtractorType != extractors.KValExtractor {
+	if !ok && !extractors.SupportsMap(extractor) {
 		return nil
 	}
 	switch extractor.GetType() {
@@ -67,9 +68,11 @@ func (request *Request) Extract(data map[string]interface{}, extractor *extracto
 	case extractors.KValExtractor:
 		return extractor.ExtractKval(data)
 	case extractors.XPathExtractor:
-		return extractor.ExtractHTML(item)
+		return extractor.ExtractXPath(item)
 	case extractors.JSONExtractor:
 		return extractor.ExtractJSON(item)
+	case extractors.DSLExtractor:
+		return extractor.ExtractDSL(data)
 	}
 	return nil
 }
@@ -119,12 +122,14 @@ func (request *Request) responseToDSLMap(resp *http.Response, host, matched, raw
 	data["response"] = rawResp
 	data["status_code"] = resp.StatusCode
 	data["body"] = body
-	data["content_length"] = resp.ContentLength
 	data["all_headers"] = headers
+	data["header"] = headers
 	data["duration"] = duration.Seconds()
 	data["template-id"] = request.options.TemplateID
 	data["template-info"] = request.options.TemplateInfo
 	data["template-path"] = request.options.TemplatePath
+
+	data["content_length"] = utils.CalculateContentLength(resp.ContentLength, int64(len(body)))
 
 	if request.StopAtFirstMatch || request.options.StopAtFirstMatch {
 		data["stop-at-first-match"] = true
@@ -155,8 +160,16 @@ func (request *Request) MakeResultEventItem(wrapped *output.InternalWrappedEvent
 		MatcherStatus:    true,
 		IP:               types.ToString(wrapped.InternalEvent["ip"]),
 		Request:          types.ToString(wrapped.InternalEvent["request"]),
-		Response:         types.ToString(wrapped.InternalEvent["response"]),
+		Response:         request.truncateResponse(wrapped.InternalEvent["response"]),
 		CURLCommand:      types.ToString(wrapped.InternalEvent["curl-command"]),
 	}
 	return data
+}
+
+func (request *Request) truncateResponse(response interface{}) string {
+	responseString := types.ToString(response)
+	if len(responseString) > request.options.Options.ResponseSaveSize {
+		return responseString[:request.options.Options.ResponseSaveSize]
+	}
+	return responseString
 }
